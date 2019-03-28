@@ -8,7 +8,8 @@
 This code does Y-haplogroup assigmment and has some utilities for analysing and viewing the results. 
 
 I started with AMY-TREE, which was very useful but I ran into some trouble and couldn't easly change the code.
-It takes as input the tree and mutation files that AMY-TREE uses.
+
+But this code takes as input the tree and mutation files that AMY-TREE uses.
 
 I tested the code against what AMY-TREE produced and it was broadly consistent. I checked by hand discrepant samples and preferred my results.
 
@@ -89,7 +90,7 @@ The optional arguments are explained below. If not given the default values are 
 * `prune` If producing PDF only show the path of the haplogroup
 * `score-node-only` for the PDF option, the score of the node is increased by the score of descendant nodes. When this option is chosen only the score of the actual node is used
 * `cut` Only show haplogroups with F1-score above the cut-off (default is 0)
-* `ignore
+* `ignore` Ignore the SNPs that AMY-tree would ignore -- default is NOT (so different behaviour to AMY-tree)
 * `scan` this is used to show the potential nodes in the Y-tree that are covered by the BIM file or the AMY data rather than doing classifying
 * `table` produces for each sample given a text file showing all mutations that match the tree
 * `overall` if chosen, produces a PDF file summarising the haplogroup assignments for all the sample. The nodes in red are covered by samples, size of node adjusted by number of samples.
