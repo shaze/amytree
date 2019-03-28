@@ -1,27 +1,23 @@
 
 
-params.amy   = "/opt/exp_soft/bioinf/AMY-tree"
-params.mutes = "MutationConversion_v2.2.txt"
-params.tree  = "UpdatedTree_v2.2.txt"
-params.qc    = "qualityControl_v2.0.txt"
-params.ref_dir = "/dataB/aux/37"
-
-amy   = params.amy
-mut1_ch = Channel.create()
-mut_ch =   Channel.fromPath("$amy/${params.mutes}").tap(mut1_ch)
+params.problems = 0
+mut_ch  =   file(params.mutes)
+ref_ch  = file(params.refy)
+qc_ch   = file(params.qc)
+tree_ch = file(params.tree)
 
 
+empties = [false,"False","false", "FALSE",0,"","0"]
 
-
-ref1_ch = Channel.fromPath("${params.ref_dir}/yref.fa")
-ref2_ch = Channel.fromPath("${params.ref_dir}/yref.fa")
-qc_ch   = Channel.fromPath("${amy}/${params.qc}")
+if (empties.contains(params.problems))
+    problems_ch = Channel.from("main.nf") 
+else
+    problems_ch = file(params.problems)
 
 plink_ch = Channel
    .fromFilePairs("${params.plink}.{bed,bim,fam}",size:3, flat : true){ file -> file.baseName}
 
 
-tree_ch = Channel.fromPath("$amy/${params.tree}")
 
 
 
@@ -32,53 +28,37 @@ fam = new File("${params.plink}.fam").readLines().collect ([]) { it -> d   = it.
 process getMales {
   input:
      set val(base), file(bed), file(bim), file(fam) from  plink_ch
+     file (problems) from problems_ch
   output:
-     file("male.ped") into ped_ch
-     file("male.map") into map_ch
+     set file("males.bed"), file("males.bim"), file("males.fam") into males_ch
   script:
+     if (empties.contains(params.problems))
+        prob = "" 
+     else
+        prob = "--exclude $problems"
      """
-     plink --bfile $base --keep-allele-order --filter-males --chr 24 --recode  --out male
+     plink --bfile $base $prob --maf 0.075 --geno 0.1 --keep-allele-order --filter-males --chr 24 --make-bed --out males
      """
 }
 
 
-process getIndPlinkfile {
+process convertAmy {
   input:
-  set val(ped_str), file(map) from ped_ch.splitText().combine(map_ch)
+  set file(bed), file(bim), file(fam) from males_ch
   output:
-     file("${out}.vcf") into vcf_ch
+     file("*amy") into amy_ch mode 'flatten'
+  publishDir 'yhaplo/amy'
   script:
-     genotype = ped_str.trim()
-     p = ped_str.split(' ')
-     out = p[0]+"_"+p[1]
+     base = bed.baseName
      """
-     echo $genotype > ped
-     plink --keep-allele-order --ped ped --map $map  --recode vcf --out $out
+     plink2amy.py $base
      """
 }
-
-
-process why {
-   module 'perl526'
-  input:
-     file(vcf) from vcf_ch
-  output:
-     file(why) into why_ch 
-  publishDir "yhaplo/$base"
-  script:
-     base = vcf.baseName
-     why  = "${base}_AMY-tree.txt"
-     """
-     perl $amy/WHY_v1.0.pl $vcf vcf
-     """
-}
-
 
 
 process getStatusReference {
-   module 'perl526'
   input:
-   file(ref) from ref1_ch
+   file(ref) from ref_ch
    file(mutation) from mut_ch
   output:
    file(status) into status_ch
@@ -86,36 +66,59 @@ process getStatusReference {
   script:
     status="status.txt"
     """
-    perl $amy/getStatusReference.pl $ref $mutation hg19 $status
+     getStatusReference.pl $ref $mutation hg19 $status
     """
 }
 
 
 
 
-data_ch = status_ch.merge(tree_ch,ref2_ch,qc_ch,mut1_ch).combine(why_ch)
+data_ch = status_ch.combine(amy_ch)
 
 
 
 process amy {
-   module 'perl526'
-   time '92h'
-   memory  '2G'
+   memory  '1G'
   input:
-   set file(status), file(tree), file(ref), file(qc), file(mutation), file(why) from data_ch
-  publishDir "yhaplo/"
+   set file(status), file(amy) from data_ch
+   file (tree) from tree_ch
+   file (ref)  from ref_ch
+   file (mutation) from mut_ch
+   file (qc)   from qc_ch
+  publishDir "yhaplo/trees"
   output:
-   file("$ind/*")
+  set val(base), file("*analysis.txt") into amy_result_ch
   script:
-   ind = why.baseName.replace("_AMY-tree","")
+   base=amy.baseName
    """
-   mkdir -p $ind
-   perl $amy/AMY-tree_v2.0.pl $why $ind/ $tree $mutation $ref $status  $qc hg19
+    AMY-tree_v2.0.pl $amy ./ $tree $mutation $ref $status  $qc hg19
    """
 }
 
+process grabIndivResult {
+  input:
+    set val(base), file(res) from amy_result_ch
+  output:
+    file ("${base}.rsy") into overall_result_ch
+  script:
+    """
+    grab_result.py $base $res ${base}.rsy
+    """
+}
 
 
+process summariseResult {
+  input:
+    file(results) from overall_result_ch.toSortedList()
+  publishDir "yhaplo/"
+  output:
+  file(out)
+  script:
+   out = params.out
+   """
+   cat *rsy > $out
+   """
+}
 
 
 
