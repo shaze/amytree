@@ -18,18 +18,23 @@ Later, someone suggested SNAPPY and I then ran SNAPPY against the same data. The
 
 ### Installing
 
-Uses the ete3 package which has a number of requirements that I found difficult to install.
+Uses the ete3 package which has a number of requirements
 * On my CentOS system I had to have the packags libxkbcommon-x11 and libxkbcommon-x11-devel insatlled
-
+* To run you need to have an active X11 session. If you don't want that, e.g. when running remotely, I have found success in using a  virtual X11 session
+   * Install xorg-x11-server-Xvfb
+   * run like this `xvfb-run python3 bin/plotY.py .... `
 
 ### Running
 
 This code takes a data set and reference files and classifies samples according to their Y-haplogroup, showing alternatives
 
 ```
-usage: plotY.py [-h] [--format FORMAT] [--scan] [--table] [--pdf] [--result]
-                [--prune] [--show-probes] [--show-bad-probes] [--ignore]
-                [--cut CUT] [--out OUT] [--score-node-only]
+usage: plotY.py [-h] [--format FORMAT] [--depth DEPTH] [--scan] [--table]
+                [--pdf] [--result] [--best] [--points POINTS]
+                [--pie min-wedge] [--prune] [--show-probes]
+                [--show-bad-probes] [--ignore] [--overall] [--cut CUT]
+                [--num NUM] [--out OUT] [--out-dir OUT_DIR]
+                [--score-node-only]
                 tree mute sample [sample ...]
 
 positional arguments:
@@ -40,17 +45,23 @@ positional arguments:
 optional arguments:
   -h, --help         show this help message and exit
   --format FORMAT
+  --depth DEPTH
   --scan
   --table
   --pdf              produce PDF of the tree
   --result           show text file of result
+  --best             use internal node instead of leaves if better
+  --points POINTS    font size of labels
+  --pie min-wedge    Produce pie chart
   --prune            prune tree for PDF
   --show-probes      show relevant SNPs in output file
   --show-bad-probes  show SNPs inconsistent with call in output file
   --ignore
+  --overall          Show overall tree
   --cut CUT
+  --num NUM          number of samples
   --out OUT
-  --out-dir DIR   
+  --out-dir OUT_DIR  output directory
   --score-node-only
 ```
 
@@ -74,6 +85,8 @@ See https://en.wikipedia.org/wiki/Sensitivity_and_specificity for a discussion. 
 
 
 The optional arguments are explained below. If not given the default values are used
+* `best` By default, any leaf nodes in the tree that have an F1 score above the cut-off are returned. If `simplify` is chosen, then we try return the single best node. The heuristic used is at each step at each node in the tree to return the child of the node, or the node itself with the best sensitivity and if the sensitivity is the same the best 
+* `cut` Only show haplogroups with F1-score above the cut-off (default is 0)
 * `format` The format of the input: 
      * `plink` -- the default. The data can be found in a PLINK data set (bed,bim,fam). In this case, the `sample`
         parameter should consist of exactly one string which is the base of the PLINK data set. All individuals
@@ -81,20 +94,28 @@ The optional arguments are explained below. If not given the default values are 
         to ensure it is only Y-data and only contains males.
      * `amy` The file is in the format that AMY-tree expects. In this case there should be at least 1 but could be many        (e.g. specified with globbing) data files. Each person in their own file
      * `bim`  The input is a PLINK bim file. This really only intended to be used for the "scan" option below.
-* `out`  the name of the output file -- default is "output.txt"
-* `out-dir` directory into which all output should be placed -- default is current working directory
-* `result` put a one line summary in the output file for each sample. Each line contains the ID of the sample, followed by a comma separated list of haplogroup assignments. After each assignment is the number of TPs and the F1 score.
-* `show-probes` show the TPs for each tree
-* `show-bad-probes` show the FNs for each tree (thes are shown with a "-" in front) 
-* `pdf` for every sample, create a PDF picture of the tree, nodes that are covered are put in red, size adjusted by coverage
-* `prune` If producing PDF only show the path of the haplogroup
-* `score-node-only` for the PDF option, the score of the node is increased by the score of descendant nodes. When this option is chosen only the score of the actual node is used
-* `cut` Only show haplogroups with F1-score above the cut-off (default is 0)
 * `ignore` Ignore the SNPs that AMY-tree would ignore -- default is NOT (so different behaviour to AMY-tree)
-* `scan` this is used to show the potential nodes in the Y-tree that are covered by the BIM file or the AMY data rather than doing classifying
-* `table` produces for each sample given a text file showing all mutations that match the tree
-* `overall` if chosen, produces a PDF file summarising the haplogroup assignments for all the sample. The nodes in red are covered by samples, size of node adjusted by number of samples.
 * `num` takes an integer N and only analyses the first N samples. Probably only useful for debugging the code
+* `out-dir` directory into which all output should be placed -- default is current working directory
+* `out`  the name of the output file -- default is "output.txt"
+* `overall` if chosen, produces a PDF file summarising the haplogroup assignments for all the sample. The nodes in red are covered by samples, size of node adjusted by number of samples.
+* `pdf` for every sample, create a PDF picture of the tree, nodes that are covered are put in red, size adjusted by coverage
+* `pie n`: Produce a pie chart (PDF format) of the distribution of haplotypes of all the samples. The parameter is a floating point number that describes the minimum percentage that a slice in the pie must have in order to be shown. If a slice has less than the given percentage, then the percentage is is allocated to the parent haplogroup. If  there is a slice for E1b with 15 and E1 for 12 this means, that 15 per cent of the sample have haplotype E1b and 12 percent of the sample have a haplogroup in E1 _other_ than E1b. At the root of tree an "Other" slice is shown if needed provided the "Other" unallocated component is less than 2 per cent. The output PDF file is put in the directory specified by `out_dir` and has a name with prefix given by `out` and the suffix `-pie.pdf`.
+* `points n`: The font size of the labels in the pie chart
+* `prune` If producing PDF only show the path of the haplogroup
+* `result` put a one line summary in the output file for each sample. Each line contains the ID of the sample, followed by a comma separated list of haplogroup assignments. After each assignment is the number of TPs and the F1 score.
+* `scan` this is used to show the potential nodes in the Y-tree that are covered by the BIM file or the AMY data rather than doing classifying
+* `score-node-only` for the PDF option, the score of the node is increased by the score of descendant nodes. When this option is chosen only the score of the actual node is used
+* `show-bad-probes` show the FNs for each tree (thes are shown with a "-" in front) 
+* `show-probes` show the TPs for each tree
+* `table` produces for each sample given a text file showing all mutations that match the tree
+
+###
+
+Example run
+
+xvfb-run python3 bin/plotY.py --best  --prune --pdf --pie 9 --result --depth 9  /opt/exp_soft/bioinf/AMY-tree/african_tree.txt /opt/exp_soft/bioinf/AMY-tree/african_mutation.txt sa-males --out-dir sa-males --out sa-males.txt
+
 
 
 ## mtparse.py

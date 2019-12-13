@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/env python314
 
 import re
 import sys
@@ -8,6 +8,10 @@ from ete3 import Tree, faces, AttrFace, TreeStyle, NodeStyle
 import argparse
 import math
 from pandas_plink import read_plink
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
 
 TAB=chr(9)
 
@@ -16,12 +20,19 @@ def parseArguments():
         sys.argv="mafplot.py $input $output".split()
     parser=argparse.ArgumentParser()
     parser.add_argument("--format",  dest="format", action="store", default="plink")
+    parser.add_argument("--depth",  dest="depth", action="store", default=10000, type=int)
     parser.add_argument("--scan",  dest="scan", action="store_true", default=False)
     parser.add_argument("--table",  dest="table", action="store_true", default=False)
     parser.add_argument("--pdf",  dest="pdf", action="store_true", default=False,\
                                     help="produce PDF of the tree")    
     parser.add_argument("--result",  dest="result", action="store_true", default=False,\
                                     help="show text file of result")    
+    parser.add_argument("--best",  dest="best", action="store_true", default=False,\
+                                    help="use internal node instead of leaves if better")    
+    parser.add_argument("--points",  dest="points", action="store", default=15,type=int,\
+                                    help="font size of labels")    
+    parser.add_argument("--pie",  dest="pie", action="store", default=0, type=float,\
+                                    help="Produce pie chart",metavar='min-wedge')    
     parser.add_argument("--prune",  dest="prune", action="store_true", default=False,\
                                     help="prune tree for PDF")    
     parser.add_argument("--show-probes",  dest="show_probes",\
@@ -49,11 +60,7 @@ def my_layout(node):
   faces.add_face_to_node(AttrFace("name"), node, column=0, position="branch-right")
 
 args  = parseArguments()
-
-
-
-
-
+overall_count = {'Root':0}
 ts = TreeStyle()
 ts.show_leaf_name = False
 ts.show_branch_support = False
@@ -205,25 +212,27 @@ nstyle[0]["size"]=4
 nstyle[0]["fgcolor"]="blue"
 
 
-def getLeavesScore(score,TP,FN,node,probes,not_match):
-    yes,no=score        
+def getLeavesScore(depth,TP,FN,node,probes,not_match):
     if node.name in probes:
-        yes = yes+len(probes[node.name])
         TP_curr = TP + probes[node.name]
     else:
         TP_curr = TP
     if node.name in not_match:
-        no  = no + len(not_match[node.name])
         FN_curr = FN + not_match[node.name]
     else:
         FN_curr = FN
-    if node.is_leaf():
-        TP_curr = set(TP_curr)
-        FN_curr = set(FN_curr)
-        return [(node.name,TP_curr, FN_curr)]
+    TP_set = set(TP_curr)
+    FN_set = set(FN_curr)
+    if node.is_leaf() or depth>= args.depth:
+        return [[node.name,TP_set, FN_set]]
     res =[]
     for child in node.children:
-        res = res + getLeavesScore((yes,no),TP_curr,FN_curr,child,probes,not_match)
+        descs  = getLeavesScore(depth+1,TP_curr,FN_curr,child,probes,not_match)
+        for this_descendant in descs:
+            if len(TP_curr) < len(this_descendant[1]): #   only bother about descendants who have more info than us!
+                res.append(this_descendant)
+    if len(res)==0:
+        return [[node.name,TP_set, FN_set]]
     return res
 
         
@@ -279,13 +288,13 @@ def prune(tree, prune_set):
        if keep:
            return (True, rem_list)
        else:
-           return (False, [node])
+           return (False, [node]+rem_list)
    ok, del_nodes = r_prune(tree)
    return del_nodes
 
 def produceClassification(out,base,tr,probes,not_match):
     out.write(base+TAB)
-    result = getLeavesScore((0,0),[],[],tr,probes,not_match)    
+    result = getLeavesScore(0,[],[],tr,probes,not_match)    
     leaf_names, TPs, FNs = zip(*result)
     all_pos = set([]).union(*TPs)
     all_neg = set([]).union(*FNs)
@@ -308,6 +317,8 @@ def produceClassification(out,base,tr,probes,not_match):
         leaf_attrs.append((F1,res))
     leaf_attrs.sort(reverse=True)
     leaf_data=list(map(lambda x:x[1],leaf_attrs))
+    overall_count[best_leaf]=overall_count.get(best_leaf,0)+1
+    if args.best: leaf_data=[leaf_data[0]]
     out.write(",".join(leaf_data))
     out.write("\n")
     return best_leaf
@@ -327,6 +338,8 @@ def processSample(out,sample_name,sample_data):
    if args.pdf and len(prune_set)>0:
        if args.prune:  # for this part option of pruning
            rem_list = prune(tr,prune_set)
+           for r in rem_list:
+             r.detach()
        drawTree(base,tr)
    if args.result:
        if len(prune_set)==0:
@@ -350,6 +363,41 @@ def presentOverall(tree):
     del_nodes = prune(tree,want)
     for node in del_nodes: node.detach()
         
+
+def getPie(depth,node):
+    """Finds the wedges of a pie chart.
+       
+       returns a pair 
+         first element is a list of wedges [(name, weight), (name, weight), ... ]
+         second element   integer -- unallocated weights
+    """
+    weight = overall_count.get(node.name,0)
+    if node.is_leaf() or depth>args.depth:
+        if weight/N*100 >= args.pie:
+            return ([(node.name,weight)],0)
+        else:
+            return  ([], weight)
+    wedges  = []
+    for child in node.children:
+        (w,u) = getPie(depth+1,child)
+        wedges = wedges + w
+        weight = weight+u
+    if weight/N*100 >= args.pie: # weight of node + children above cut-off
+        wedges.append((node.name, weight))
+        weight = 0  # all weight allocated
+    return (wedges, weight)
+
+
+def drawWedges(outbase,wedges):
+    slices = wedges[0]
+    if wedges[1]*N/100>2:
+        slices.append(("Other",wedges[1]))
+    labels, weights = zip(*slices)
+    fig1, ax1 = plt.subplots()
+    ax1.pie(weights, labels=labels, autopct='%1.0f%%',startangle=90,textprops={'fontsize': args.points})
+    ax1.axis('equal') 
+    plt.savefig(join(args.out_dir,"%s-pie.pdf")%outbase)
+
 
 overall={}           
 marker, parent = readTree(open(args.tree))
@@ -381,7 +429,13 @@ else:
         processSample(out,sample,open(sample))
 out.close()
 
+outbase =  splitext(args.out)[0]
 if args.overall:
     presentOverall(orig)
-    fn=splitext(args.out)[0]+"-overall"
+    fn=outbase+"-overall"
     drawTree(fn,orig)
+if args.pie:
+    wedges = getPie(0,orig)
+    drawWedges(outbase,wedges)
+
+    
