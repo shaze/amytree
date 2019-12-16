@@ -7,6 +7,8 @@ from os.path import splitext,join
 from ete3 import Tree, faces, AttrFace, TreeStyle, NodeStyle
 import argparse
 import math
+from collections import defaultdict
+import pandas as pd
 from pandas_plink import read_plink
 import matplotlib
 matplotlib.use('Agg')
@@ -14,7 +16,10 @@ import matplotlib.pyplot as plt
 
 
 TAB=chr(9)
+count = "___count___"
+group_all = "___all___"
 
+#12345678901234567890123456789012345678901234567890123456789012345678901234567890123456789
 def parseArguments():
     if len(sys.argv)<=1:
         sys.argv="mafplot.py $input $output".split()
@@ -28,11 +33,27 @@ def parseArguments():
     parser.add_argument("--result",  dest="result", action="store_true", default=False,\
                                     help="show text file of result")    
     parser.add_argument("--best",  dest="best", action="store_true", default=False,\
-                                    help="use internal node instead of leaves if better")    
+                                    help="use internal node instead of leaves if better")
+    parser.add_argument("--group",  dest="group", action="store", default="",type=str,\
+                        help="file with group info, name of id and group column",\
+                        nargs=3, metavar="FILE COL")    
+    parser.add_argument("--mingroup",  dest="mingroup", action="store", \
+                                    default=0,type=int,\
+                                    help="min size group should be",\
+                                    metavar="INT")    
+    parser.add_argument("--labels",  dest="labels", action="store", \
+                                    default="",type=str,\
+                                    help="relabelling rules",\
+                                    metavar="str")    
     parser.add_argument("--points",  dest="points", action="store", default=15,type=int,\
                                     help="font size of labels")    
+    parser.add_argument("--terminal-nodes",  dest="terminals", action="store", \
+                        default="",type=str,\
+                        help="comma separated list of terminal nodes")    
     parser.add_argument("--pie",  dest="pie", action="store", default=0, type=float,\
                                     help="Produce pie chart",metavar='min-wedge')    
+    parser.add_argument("--normalise", dest="norm", action="store_true", default=False,\
+                                    help="normalise summary files")    
     parser.add_argument("--prune",  dest="prune", action="store_true", default=False,\
                                     help="prune tree for PDF")    
     parser.add_argument("--show-probes",  dest="show_probes",\
@@ -60,7 +81,6 @@ def my_layout(node):
   faces.add_face_to_node(AttrFace("name"), node, column=0, position="branch-right")
 
 args  = parseArguments()
-overall_count = {'Root':0}
 ts = TreeStyle()
 ts.show_leaf_name = False
 ts.show_branch_support = False
@@ -223,13 +243,14 @@ def getLeavesScore(depth,TP,FN,node,probes,not_match):
         FN_curr = FN
     TP_set = set(TP_curr)
     FN_set = set(FN_curr)
-    if node.is_leaf() or depth>= args.depth:
+    if node.is_leaf() or depth>= args.depth or node.name in terminals:
         return [[node.name,TP_set, FN_set]]
     res =[]
     for child in node.children:
         descs  = getLeavesScore(depth+1,TP_curr,FN_curr,child,probes,not_match)
         for this_descendant in descs:
-            if len(TP_curr) < len(this_descendant[1]): #   only bother about descendants who have more info than us!
+            if len(TP_curr) < len(this_descendant[1]): 
+                #only bother about descendants who have more info than us!
                 res.append(this_descendant)
     if len(res)==0:
         return [[node.name,TP_set, FN_set]]
@@ -317,7 +338,6 @@ def produceClassification(out,base,tr,probes,not_match):
         leaf_attrs.append((F1,res))
     leaf_attrs.sort(reverse=True)
     leaf_data=list(map(lambda x:x[1],leaf_attrs))
-    overall_count[best_leaf]=overall_count.get(best_leaf,0)+1
     if args.best: leaf_data=[leaf_data[0]]
     out.write(",".join(leaf_data))
     out.write("\n")
@@ -352,54 +372,129 @@ def processSample(out,sample_name,sample_data):
                r.detach()
        best_leaf = produceClassification(out,base,tr,probes,not_match)
        if len(best_leaf)>=1:
-           overall[best_leaf]=overall.get(best_leaf,0)+1
+          for gfn in groups:
+              this_g = gfn(sample_name)
+              if this_g not in overall: 
+                  overall[this_g]=defaultdict(int)
+              overall[this_g][best_leaf]=overall[this_g].get(best_leaf,0)+1
+              overall[this_g][count]=overall[this_g].get(count,0)+1
+
 
 def presentOverall(tree):
-    want = overall.keys()
+    want = overall[group_all].keys()
     for name in want:
+        if name==count:continue
         these = tree.search_nodes(name=name)
-        style  = getSimpleStyle(overall[name])
+        style  = getSimpleStyle(overall[group_all][name])
         these[0].set_style(style)
     del_nodes = prune(tree,want)
     for node in del_nodes: node.detach()
         
 
-def getPie(depth,node):
+def getPie(depth,node,group):
     """Finds the wedges of a pie chart.
        
        returns a pair 
          first element is a list of wedges [(name, weight), (name, weight), ... ]
          second element   integer -- unallocated weights
     """
-    weight = overall_count.get(node.name,0)
-    if node.is_leaf() or depth>args.depth:
+    N=overall[group][count]
+    weight = overall[group].get(node.name,0)
+    if node.is_leaf() or depth>args.depth or node.name in terminals:
         if weight/N*100 >= args.pie:
             return ([(node.name,weight)],0)
         else:
             return  ([], weight)
     wedges  = []
     for child in node.children:
-        (w,u) = getPie(depth+1,child)
+        (w,u) = getPie(depth+1,child,group)
         wedges = wedges + w
         weight = weight+u
-    if weight/N*100 >= args.pie: # weight of node + children above cut-off
+    if weight/N*100 >= args.pie: 
+        # weight of node + children above cut-off
         wedges.append((node.name, weight))
         weight = 0  # all weight allocated
     return (wedges, weight)
 
 
-def drawWedges(outbase,wedges):
-    slices = wedges[0]
-    if wedges[1]*N/100>2:
+def drawWedges(outbase,group,cdict,wedges):
+    slices = wedges[0] #  wedges[0] wedges big enough to show
+    if wedges[1]*overall[group][count]/100>2: #wedges[1] size of "other"
         slices.append(("Other",wedges[1]))
     labels, weights = zip(*slices)
+    colours = [cdict[label] for label in labels]
     fig1, ax1 = plt.subplots()
-    ax1.pie(weights, labels=labels, autopct='%1.0f%%',startangle=90,textprops={'fontsize': args.points})
+    ax1.pie(weights, labels=labels, autopct='%1.0f%%',startangle=90,\
+            colors = colours,\
+            textprops={'fontsize': args.points})
     ax1.axis('equal') 
-    plt.savefig(join(args.out_dir,"%s-pie.pdf")%outbase)
+    if group==group_all: 
+        g_fname=""
+    else:
+        g_fname=rdict.get(group,group)+"-"
+    plt.savefig(join(args.out_dir,"%s-%spie.pdf")%(outbase,g_fname))
+    g=open(join(args.out_dir,"%s-%ssumm.csv"%(outbase,g_fname)),"w")
+    for i, label in enumerate(labels):
+        g.write("%s\t%d\n"%(label,weights[i]))
+    g.write("Total\t%d\n"%(overall[group][count]))
+    g.close()
+
+    
+
+def getGroups(fname, id_col, phe_col):
+    gdf = pd.read_csv(fname,delim_whitespace=True,dtype={phe_col:str})
+    err_msg = ""
+    for col in [id_col, phe_col]:
+        if  col not in gdf.columns:
+            err_msg=err_msg+\
+                     "The column <%s> cannot be found in the file <%s>"%(col,fname)
+    if err_msg: sys.exit(err_msg)
+    gdf.set_index(id_col,inplace=True)
+    return gdf
 
 
-overall={}           
+def getFixedColours(wedges):
+    ''' need to keep colours consistent as not all haplogroups appear in all
+        e.g., to be there must appear at a frequency above the cut-off so could
+        appear in a sub-group but not the overall list '''
+    ccount = {}
+    for (slices, rest) in wedges:
+        for (label, weight) in slices:
+            ccount[label]=ccount.get(label,0)+1
+    leaf_names  = [lf for lf in ccount.keys()]
+    leaf_names.sort(key=lambda leaf: ccount[leaf],reverse=True)
+    colour_hex = ['#1f77b4', '#ff1f8e', '#2ca02c', '#d62728', '#9467bd', '#8c564b',\
+                  '#e377c2', '#7f7f7f', '#bcbd22', '#17becf', '#4c24b4',\
+                  '#ef8f8e','#bcfde2','#1070cf','#20af3c' ]
+    cdict = dict(zip(leaf_names,colour_hex))
+    if "Other" not in cdict:
+        cdict['Other']=colour_hex[len(cdict)]
+    return cdict
+
+rdict={}
+if args.labels:
+    rules = args.labels.split(",")
+    rdict[group_all]="ALL"
+    for r in rules:
+        old,new=r.split("=")
+        rdict[old]=new
+
+
+terminals = args.terminals.split(",")        
+
+groups = [lambda x: group_all]
+if args.group:
+    gdf=getGroups(*args.group)
+    def getfn(sample):
+        g_n=gdf.loc[sample][args.group[2]]
+        if str(g_n) in ["NA","nan"]:
+            g_n="none"
+        return g_n
+    groups.append(getfn)
+                       
+
+
+overall={} 
 marker, parent = readTree(open(args.tree))
 marker_pos, mute_alleles = getMarkers(open(args.mute))
 children, tree_string=cvtNewick(parent)
@@ -407,6 +502,7 @@ children, tree_string=cvtNewick(parent)
 orig = Tree(tree_string,format=8)
 
 out=open(join(args.out_dir,args.out),"w")
+outbase =  splitext(args.out)[0]
 
 if args.format=="plink":
     if len(args.sample)!=1:
@@ -429,13 +525,41 @@ else:
         processSample(out,sample,open(sample))
 out.close()
 
-outbase =  splitext(args.out)[0]
-if args.overall:
-    presentOverall(orig)
-    fn=outbase+"-overall"
-    drawTree(fn,orig)
-if args.pie:
-    wedges = getPie(0,orig)
-    drawWedges(outbase,wedges)
 
+group_names = [g for g in overall.keys() if overall[g][count]>0]
+if args.pie:
+    all_wedges = []
+    for group in group_names:
+        all_wedges.append(getPie(0,orig,group))
+    # now we have all the wedges, we can fix the colours
+    cdict = getFixedColours(all_wedges)
+    # now draw theedges
+    for i,group in enumerate(group_names):
+        drawWedges(outbase,group,cdict, all_wedges[i])
+
+
+#if not args.overall: sys.exit(0)
+#presentOverall(orig)
+#fn=outbase+"-overall"
+#drawTree(fn,orig)
+
+lnames = set()
+# zero out any values for which the leaf does not appear
+for g in group_names:
+    del overall[g][count]
+    lnames = lnames | set(overall[g].keys())
+for g in group_names:
+    for lf in lnames:
+        if lf not in overall[g]: overall[g][lf]=0
+
+
+classification = pd.DataFrame.from_dict(overall,dtype=int)
+classification.rename(rdict,inplace=True,axis=1)
+classification.to_csv(join(args.out_dir,outbase)+"-table.csv",sep="\t")
+for col in classification.columns:
+  classification[col]=classification[col]*100/sum(classification[col])
+  classification=classification.round(1)
+
+classification.to_csv(join(args.out_dir,outbase)+"-norm-table.csv",sep="\t")
     
+
